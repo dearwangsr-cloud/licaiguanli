@@ -1,0 +1,530 @@
+﻿<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#4da3ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="理财备注">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>理财备注工具</title>
+
+<style>
+:root {
+  --primary:#4da3ff;
+  --bg:#f5f9ff;
+  --danger: #ff4d4d;
+}
+
+body {margin:0;font-family:-apple-system;background:var(--bg);}
+header {background:var(--primary);color:#fff;padding:15px;text-align:center;}
+
+.container {padding:10px;padding-bottom:80px;}
+
+.card {
+  background:#fff;
+  border-radius:12px;
+  padding:12px;
+  margin-bottom:10px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.08);
+}
+
+.row {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+
+button {
+  background:var(--primary);
+  color:white;
+  border:none;
+  padding:6px 10px;
+  border-radius:6px;
+  margin:3px;
+}
+
+.tag {
+  display:inline-block;
+  background:#e6f2ff;
+  color:var(--primary);
+  padding:3px 6px;
+  border-radius:6px;
+  margin:2px;
+  font-size:12px;
+}
+
+/* 标签样式优化，增加相对定位以放置删除按钮 */
+.tag-item {
+  display:inline-flex;
+  align-items:center;
+  padding:4px 8px;
+  margin:3px;
+  border-radius:6px;
+  background:#eee;
+  cursor:pointer;
+  font-size: 14px;
+}
+
+.tag-item.active {
+  background:var(--primary);
+  color:#fff;
+}
+
+/* 删除按钮样式 */
+.tag-del {
+  margin-left: 6px;
+  font-size: 12px;
+  color: #999;
+  font-style: normal;
+  padding: 2px 4px;
+  border-radius: 50%;
+  transition: background 0.3s;
+}
+
+.tag-item.active .tag-del {
+  color: #fff;
+  opacity: 0.8;
+}
+
+.tag-del:hover {
+  background: rgba(255, 77, 77, 0.2);
+  color: var(--danger);
+}
+
+.more {cursor:pointer;font-weight:bold;}
+.menu {margin-top:5px;}
+
+.note {
+  margin-top:6px;
+  font-size:12px;
+  color:#666;
+}
+
+.nav {
+  position:fixed;
+  bottom:0;
+  width:100%;
+  display:flex;
+  background:white;
+  border-top:1px solid #ddd;
+}
+
+.nav div {
+  flex:1;
+  text-align:center;
+  padding:10px;
+}
+
+.active-tab {color:var(--primary);font-weight:bold;}
+
+#tagModal {
+  display:none;
+  position:fixed;
+  top:0;left:0;
+  width:100%;height:100%;
+  background:rgba(0,0,0,0.4);
+  z-index: 1000;
+}
+
+.modal-box {
+  background:#fff;
+  margin:20% auto;
+  padding:15px;
+  border-radius:10px;
+  width:90%;
+}
+
+#tagList { margin-bottom: 10px; }
+
+input, textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+</style>
+</head>
+
+<body>
+
+<header>理财备注工具</header>
+
+<div class="container" id="app"></div>
+
+<div class="nav">
+  <div onclick="switchTab('fund')" id="nav-fund" class="active-tab">基金</div>
+  <div onclick="switchTab('strategy')" id="nav-strategy">策略</div>
+</div>
+
+<input type="file" id="fileInput" style="display:none" onchange="importData(this)">
+
+<div id="tagModal">
+  <div class="modal-box">
+    <h3>新增基金</h3>
+    <div id="tagList"></div>
+    <input id="newTagInput" placeholder="新增标签">
+    <textarea id="noteInput" placeholder="备注（可选）"></textarea>
+    <div style="text-align: right;">
+        <button onclick="confirmTag()">确定</button>
+        <button onclick="closeTagModal()" style="background:#ccc">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let data = JSON.parse(localStorage.getItem("financeData")) || {
+  categories:[],
+  strategies:[],
+  tags:["低费率","稳健","回撤小","处于高位","处于低位"]
+};
+
+let currentTab="fund";
+let openMenu=null;
+let filterTags=[];
+let currentCatIndex=null;
+
+/* ===== 核心逻辑：存储与刷新 ===== */
+function save(){
+  localStorage.setItem("financeData",JSON.stringify(data));
+  render();
+}
+
+/* ===== 标签管理功能扩展 ===== */
+
+/**
+ * 删除标签
+ * @param {Event} e - 事件对象，用于阻止冒泡
+ * @param {string} tag - 要删除的标签名称
+ */
+function deleteTag(e, tag) {
+  e.stopPropagation(); // 阻止触发父元素的点击事件（如选中标签或筛选）
+  
+  if (confirm(`确定要彻底删除标签 [${tag}] 吗？\n删除后，所有已关联该标签的基金也将不再显示此标签。`)) {
+    // 1. 从全局标签库中删除
+    data.tags = data.tags.filter(t => t !== tag);
+    
+    // 2. 从当前筛选器中移除（如果已选中）
+    filterTags = filterTags.filter(t => t !== tag);
+    
+    // 3. 遍历所有基金，移除关联的该标签
+    data.categories.forEach(cat => {
+      cat.funds.forEach(fund => {
+        fund.tags = fund.tags.filter(t => t !== tag);
+      });
+    });
+    
+    // 4. 如果在弹窗内操作，需要重新生成弹窗内的标签列表
+    if (document.getElementById("tagModal").style.display === "block") {
+      updateModalTagList();
+    }
+    
+    save();
+  }
+}
+
+/* ===== 导入导出 ===== */
+function exportData(){
+  const blob = new Blob([JSON.stringify(data)],{type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "finance_backup.json";
+  a.click();
+}
+
+function triggerImport(){
+  document.getElementById("fileInput").click();
+}
+
+function importData(e){
+  const file=e.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(){
+    if(confirm("导入将覆盖数据，确定？")){
+      data=JSON.parse(reader.result);
+      save();
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ===== 标签弹窗逻辑重构 ===== */
+function openTagModal(i){
+  currentCatIndex=i;
+  updateModalTagList();
+  document.getElementById("newTagInput").value="";
+  document.getElementById("noteInput").value="";
+  document.getElementById("tagModal").style.display="block";
+}
+
+function updateModalTagList() {
+  let html="";
+  data.tags.forEach(tag=>{
+    // 为弹窗内的标签也添加删除按钮
+    html+=`
+      <span class="tag-item" onclick="this.classList.toggle('active')">
+        ${tag}
+        <i class="tag-del" onclick="deleteTag(event, '${tag}')">×</i>
+      </span>`;
+  });
+  document.getElementById("tagList").innerHTML=html;
+}
+
+function closeTagModal(){
+  document.getElementById("tagModal").style.display="none";
+}
+
+function confirmTag(){
+  const name=prompt("基金名称");
+  if(name===null || name.trim()==="") return;
+
+  const selected=[...document.querySelectorAll("#tagList .active")].map(e=>{
+      // 提取纯文本，过滤掉子元素 <i> 的文本
+      return e.childNodes[0].textContent.trim();
+  });
+  const newTag=document.getElementById("newTagInput").value.trim();
+  const note=document.getElementById("noteInput").value.trim();
+
+  if(newTag && !data.tags.includes(newTag)){
+    data.tags.push(newTag);
+    selected.push(newTag);
+  }
+
+  data.categories[currentCatIndex].funds.push({
+    name,
+    tags:selected,
+    note:note
+  });
+
+  closeTagModal();
+  save();
+}
+
+/* ===== 筛选 ===== */
+function toggleFilterTag(tag){
+  let i=filterTags.indexOf(tag);
+  if(i>-1){filterTags.splice(i,1);}
+  else{filterTags.push(tag);}
+  render();
+}
+
+/* ===== 菜单 ===== */
+function toggleMenu(key){
+  openMenu = openMenu===key ? null : key;
+  render();
+}
+
+/* ===== 分类操作 ===== */
+function editCategory(i){
+  let name=prompt("分类名称",data.categories[i].name);
+  if(name===null || name.trim()==="") return;
+  data.categories[i].name=name;
+  save();
+}
+
+function deleteCategory(i){
+  if(confirm("删除分类？")){
+    data.categories.splice(i,1);
+    save();
+  }
+}
+
+/* ===== 基金操作 ===== */
+function addCategory(){
+  const name=prompt("分类名称");
+  if(!name) return;
+  data.categories.push({name,funds:[]});
+  save();
+}
+
+function addFund(i){
+  openTagModal(i);
+}
+
+function editFund(i,j){
+  let f=data.categories[i].funds[j];
+  let name=prompt("名称",f.name);
+  if(name===null || name.trim()==="") return;
+  let note=prompt("备注",f.note||"");
+  if(note===null) note=f.note;
+  f.name=name;
+  f.note=note;
+  save();
+}
+
+function deleteFund(i,j){
+  if(confirm("删除该基金？")){
+    data.categories[i].funds.splice(j,1);
+    save();
+  }
+}
+
+function renderFund(){
+  let html=`<div class="card"><b>标签筛选：</b><br>`;
+
+  data.tags.forEach(tag=>{
+    const active=filterTags.includes(tag)?"active":"";
+    // 添加删除图标，并绑定 deleteTag 函数
+    html+=`
+      <span class="tag-item ${active}" onclick="toggleFilterTag('${tag}')">
+        ${tag}
+        <i class="tag-del" onclick="deleteTag(event, '${tag}')">×</i>
+      </span>`;
+  });
+
+  html+=`</div>`;
+
+  html+=`
+  <div class="row">
+    <button onclick="addCategory()">+分类</button>
+    <div>
+      <button onclick="exportData()">导出</button>
+      <button onclick="triggerImport()">导入</button>
+    </div>
+  </div>`;
+
+  data.categories.forEach((c,i)=>{
+    let ckey=`c-${i}`;
+    html+=`<div class="card">
+    <div class="row">
+      <b>${c.name}</b>
+      <span>
+        <span class="more" onclick="addFund(${i})">＋</span>
+        <span class="more" onclick="toggleMenu('${ckey}')">⋮</span>
+      </span>
+    </div>
+
+    ${openMenu===ckey?`
+    <div class="menu">
+      <button onclick="editCategory(${i})">编辑分类</button>
+      <button onclick="deleteCategory(${i})">删除分类</button>
+    </div>`:""}
+    `;
+
+    c.funds.forEach((f,j)=>{
+      if(filterTags.length>0){
+        let ok=filterTags.every(t=>f.tags.includes(t));
+        if(!ok) return;
+      }
+      let key=`f-${i}-${j}`;
+      html+=`
+      <div class="card">
+        <div class="row">
+          <b>${f.name}</b>
+          <span class="more" onclick="toggleMenu('${key}')">⋮</span>
+        </div>
+        ${f.tags.map(t=>`<span class="tag">${t}</span>`).join("")}
+        ${f.note?`<div class="note">${f.note}</div>`:""}
+        ${openMenu===key?`
+        <div class="menu">
+          <button onclick="editFund(${i},${j})">编辑</button>
+          <button onclick="deleteFund(${i},${j})">删除</button>
+        </div>`:""}
+      </div>`;
+    });
+    html+=`</div>`;
+  });
+  return html;
+}
+
+/* ===== 策略渲染 ===== */
+function addStrategy(){
+  const title=prompt("标题");
+  if(!title) return;
+  const content=prompt("内容");
+  data.strategies.unshift({title,content,time:new Date().toLocaleString()});
+  save();
+}
+
+function editStrategy(i){
+  let s=data.strategies[i];
+  let title=prompt("标题",s.title);
+  if(title===null || title.trim()==="") return;
+  let content=prompt("内容",s.content);
+  if(content===null) content=s.content;
+  s.title=title;
+  s.content=content;
+  save();
+}
+
+function deleteStrategy(i){
+  if(confirm("删除？")){
+    data.strategies.splice(i,1);
+    save();
+  }
+}
+
+function renderStrategy(){
+  let html=`<button onclick="addStrategy()">+策略</button>`;
+  data.strategies.forEach((s,i)=>{
+    let key=`s-${i}`;
+    html+=`
+    <div class="card">
+      <div class="row">
+        <b>${s.title}</b>
+        <span class="more" onclick="toggleMenu('${key}')">⋮</span>
+      </div>
+      <div>${s.content}</div>
+      <small>${s.time}</small>
+      ${openMenu===key?`
+      <div class="menu">
+        <button onclick="editStrategy(${i})">编辑</button>
+        <button onclick="deleteStrategy(${i})">删除</button>
+      </div>`:""}
+    </div>`;
+  });
+  return html;
+}
+
+/* ===== 导航与主渲染 ===== */
+function switchTab(tab){
+  currentTab=tab;
+  document.getElementById("nav-fund").classList.remove("active-tab");
+  document.getElementById("nav-strategy").classList.remove("active-tab");
+  document.getElementById("nav-"+tab).classList.add("active-tab");
+  render();
+}
+
+function render(){
+  document.getElementById("app").innerHTML =
+    currentTab==="fund"?renderFund():renderStrategy();
+}
+
+render();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js')
+      .then(reg => {
+        console.log('SW registered:', reg);
+
+        // 自动检查更新
+        reg.update();
+
+        // 检测新版本
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              console.log('发现新版本，自动刷新');
+
+              // 自动刷新到最新版
+              window.location.reload();
+            }
+          });
+        });
+      })
+      .catch(err => console.log('SW error:', err));
+  });
+}
+</script>
+</body>
+</html>
